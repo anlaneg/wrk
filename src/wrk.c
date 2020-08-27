@@ -5,8 +5,11 @@
 #include "main.h"
 
 static struct config {
+    //连接数
     uint64_t connections;
+    //测试持续时间
     uint64_t duration;
+    //线程数
     uint64_t threads;
     uint64_t timeout;
     uint64_t pipeline;
@@ -16,7 +19,7 @@ static struct config {
     char    *host;
     char    *script;
     SSL_CTX *ctx;
-} cfg;
+} cfg;/*测试配置*/
 
 static struct {
     stats *latency;
@@ -492,12 +495,15 @@ static int parse_args(struct config *cfg, char **url, struct http_parser_url *pa
     while ((c = getopt_long(argc, argv, "t:c:d:s:H:T:Lrv?", longopts, NULL)) != -1) {
         switch (c) {
             case 't':
+		//记录线程数
                 if (scan_metric(optarg, &cfg->threads)) return -1;
                 break;
             case 'c':
+		//记录保持的连接数
                 if (scan_metric(optarg, &cfg->connections)) return -1;
                 break;
             case 'd':
+		//记录持续的时间
                 if (scan_time(optarg, &cfg->duration)) return -1;
                 break;
             case 's':
@@ -525,6 +531,7 @@ static int parse_args(struct config *cfg, char **url, struct http_parser_url *pa
         }
     }
 
+    //线程数及测试时间必须配置
     if (optind == argc || !cfg->threads || !cfg->duration) return -1;
 
     if (!script_parse_url(argv[optind], parts)) {
