@@ -290,14 +290,17 @@ enum http_errno {
 
 struct http_parser {
   /** PRIVATE **/
+  /*parse类型*/
   unsigned int type : 2;         /* enum http_parser_type */
   unsigned int flags : 8;        /* F_* values from 'flags' enum; semi-public */
+  /*parse的当前状态*/
   unsigned int state : 7;        /* enum state from http_parser.c */
   unsigned int header_state : 7; /* enum header_state from http_parser.c */
   unsigned int index : 7;        /* index into current matcher */
   unsigned int lenient_http_headers : 1;
 
   uint32_t nread;          /* # bytes read in various scenarios */
+  /*记录content长度*/
   uint64_t content_length; /* # bytes in body (0 if no Content-Length header) */
 
   /** READ-ONLY **/
@@ -315,6 +318,7 @@ struct http_parser {
   unsigned int upgrade : 1;
 
   /** PUBLIC **/
+  /*指向connect*/
   void *data; /* A pointer to get hook to the "connection" or "socket" object */
 };
 
@@ -356,11 +360,14 @@ enum http_parser_url_fields
  * a uint16_t.
  */
 struct http_parser_url {
+    //标记field_data中有哪些项
   uint16_t field_set;           /* Bitmask of (1 << UF_*) values */
   uint16_t port;                /* Converted UF_PORT string */
 
   struct {
+    //字段在url中的偏移量
     uint16_t off;               /* Offset into buffer in which field starts */
+    //字段在url中的长度
     uint16_t len;               /* Length of run in buffer */
   } field_data[UF_MAX];
 };

@@ -27,14 +27,19 @@ extern const char *VERSION;
 typedef struct {
     pthread_t thread;
     aeEventLoop *loop;
+    /*被测机器*/
     struct addrinfo *addr;
+    /*每线程连接数*/
     uint64_t connections;
+    /*此线程完成的连接数*/
     uint64_t complete;
+    /*此线程发起的未统计请求数*/
     uint64_t requests;
     uint64_t bytes;
     uint64_t start;
     lua_State *L;
     errors errors;
+    /*记录connections个连接*/
     struct connection *cs;
 } thread;
 
@@ -50,8 +55,10 @@ typedef struct connection {
     enum {
         FIELD, VALUE
     } state;
+    /*连接对应的fd*/
     int fd;
     SSL *ssl;
+    /*是否延迟发送*/
     bool delayed;
     uint64_t start;
     char *request;
@@ -60,6 +67,7 @@ typedef struct connection {
     uint64_t pending;
     buffer headers;
     buffer body;
+    /*存放读写数据位置*/
     char buf[RECVBUF];
 } connection;
 

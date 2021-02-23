@@ -20,11 +20,14 @@ void stats_free(stats *stats) {
 }
 
 int stats_record(stats *stats, uint64_t n) {
+    /*n不能超过limit限制，超过则不统计*/
     if (n >= stats->limit) return 0;
+    /*n值被统计到的次数加1，统计次数加1*/
     __sync_fetch_and_add(&stats->data[n], 1);
     __sync_fetch_and_add(&stats->count, 1);
     uint64_t min = stats->min;
     uint64_t max = stats->max;
+    /*更改最大值与最小值*/
     while (n < min) min = __sync_val_compare_and_swap(&stats->min, min, n);
     while (n > max) max = __sync_val_compare_and_swap(&stats->max, max, n);
     return 1;

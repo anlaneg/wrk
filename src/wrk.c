@@ -16,6 +16,7 @@ static struct config {
     bool     delay;
     bool     dynamic;
     bool     latency;
+    //被测机器
     char    *host;
     char    *script;
     SSL_CTX *ctx;
@@ -34,6 +35,7 @@ static struct sock sock = {
     .readable = sock_readable
 };
 
+/*响应解析完成后，调用response_complete*/
 static struct http_parser_settings parser_settings = {
     .on_message_complete = response_complete
 };
@@ -62,7 +64,7 @@ static void usage() {
 }
 
 int main(int argc, char **argv) {
-    char *url, **headers = zmalloc(argc * sizeof(char *));
+    char *url/*测试用url*/, **headers/*测试用headers*/ = zmalloc(argc * sizeof(char *));
     struct http_parser_url parts = {};
 
     if (parse_args(&cfg, &url, &parts, headers, argc, argv)) {
@@ -76,6 +78,7 @@ int main(int argc, char **argv) {
     char *service = port ? port : schema;
 
     if (!strncmp("https", schema, 5)) {
+        //测试https类型的url
         if ((cfg.ctx = ssl_init()) == NULL) {
             fprintf(stderr, "unable to initialize SSL\n");
             ERR_print_errors_fp(stderr);
@@ -91,8 +94,11 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT,  SIG_IGN);
 
+    /*记录各线程每统计期延迟数，超时时间定为*/
     statistics.latency  = stats_alloc(cfg.timeout * 1000);
+    /*记录各线程每统计期请求数，limit定为10M*/
     statistics.requests = stats_alloc(MAX_THREAD_RATE_S);
+    /*记录各线程信息*/
     thread *threads     = zcalloc(cfg.threads * sizeof(thread));
 
     lua_State *L = script_create(cfg.script, url, headers);
@@ -104,10 +110,11 @@ int main(int argc, char **argv) {
 
     cfg.host = host;
 
+    //创建各线程
     for (uint64_t i = 0; i < cfg.threads; i++) {
         thread *t      = &threads[i];
         t->loop        = aeCreateEventLoop(10 + cfg.connections * 3);
-        t->connections = cfg.connections / cfg.threads;
+        t->connections = cfg.connections / cfg.threads;/*每线程连接数*/
 
         t->L = script_create(cfg.script, url, headers);
         script_init(L, t, argc - optind, &argv[optind]);
@@ -123,6 +130,7 @@ int main(int argc, char **argv) {
             }
         }
 
+        /*创建测试线程*/
         if (!t->loop || pthread_create(&t->thread, NULL, &thread_main, t)) {
             char *msg = strerror(errno);
             fprintf(stderr, "unable to create thread %"PRIu64": %s\n", i, msg);
@@ -142,8 +150,11 @@ int main(int argc, char **argv) {
     printf("  %"PRIu64" threads and %"PRIu64" connections\n", cfg.threads, cfg.connections);
 
     uint64_t start    = time_us();
+    /*所有线程完成请求总数*/
     uint64_t complete = 0;
+    /*所有线程完成的字节总数*/
     uint64_t bytes    = 0;
+    /*所有线程的错误统计计数*/
     errors errors     = { 0 };
 
     sleep(cfg.duration);
@@ -164,7 +175,7 @@ int main(int argc, char **argv) {
     }
 
     uint64_t runtime_us = time_us() - start;
-    long double runtime_s   = runtime_us / 1000000.0;
+    long double runtime_s   = runtime_us / 1000000.0;/*程序的实际运行时间*/
     long double req_per_s   = complete   / runtime_s;
     long double bytes_per_s = bytes      / runtime_s;
 
@@ -181,6 +192,7 @@ int main(int argc, char **argv) {
     char *runtime_msg = format_time_us(runtime_us);
 
     printf("  %"PRIu64" requests in %s, %sB read\n", complete, runtime_msg, format_binary(bytes));
+    /*显示error相关的统计计数*/
     if (errors.connect || errors.read || errors.write || errors.timeout) {
         printf("  Socket errors: connect %d, read %d, write %d, timeout %d\n",
                errors.connect, errors.read, errors.write, errors.timeout);
@@ -190,7 +202,9 @@ int main(int argc, char **argv) {
         printf("  Non-2xx or 3xx responses: %d\n", errors.status);
     }
 
+    /*程序在运行时间内，平均每秒发出请求数*/
     printf("Requests/sec: %9.2Lf\n", req_per_s);
+    /*程序在运行时间内，平均每秒处理的字节数*/
     printf("Transfer/sec: %10sB\n", format_binary(bytes_per_s));
 
     if (script_has_done(L)) {
@@ -202,6 +216,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+/*测试线程入口*/
 void *thread_main(void *arg) {
     thread *thread = arg;
 
@@ -212,6 +227,7 @@ void *thread_main(void *arg) {
         script_request(thread->L, &request, &length);
     }
 
+    //创建connection
     thread->cs = zcalloc(thread->connections * sizeof(connection));
     connection *c = thread->cs;
 
@@ -225,6 +241,7 @@ void *thread_main(void *arg) {
     }
 
     aeEventLoop *loop = thread->loop;
+    //启定时器，每RECORD_INTERVAL_MS统计一次数据
     aeCreateTimeEvent(loop, RECORD_INTERVAL_MS, record_rate, thread, NULL);
 
     thread->start = time_us();
@@ -236,6 +253,7 @@ void *thread_main(void *arg) {
     return NULL;
 }
 
+//创建socket,触发connect
 static int connect_socket(thread *thread, connection *c) {
     struct addrinfo *addr = thread->addr;
     struct aeEventLoop *loop = thread->loop;
@@ -255,6 +273,7 @@ static int connect_socket(thread *thread, connection *c) {
 
     flags = AE_READABLE | AE_WRITABLE;
     if (aeCreateFileEvent(loop, fd, flags, socket_connected, c) == AE_OK) {
+        /*指向connect*/
         c->parser.data = c;
         c->fd = fd;
         return fd;
@@ -273,11 +292,13 @@ static int reconnect_socket(thread *thread, connection *c) {
     return connect_socket(thread, c);
 }
 
+/*记录统计期内请求情况*/
 static int record_rate(aeEventLoop *loop, long long id, void *data) {
     thread *thread = data;
 
     if (thread->requests > 0) {
         uint64_t elapsed_ms = (time_us() - thread->start) / 1000;
+        /*本统计期，每秒理论请求数*/
         uint64_t requests = (thread->requests / (double) elapsed_ms) * 1000;
 
         stats_record(statistics.requests, requests);
@@ -324,6 +345,7 @@ static int response_body(http_parser *parser, const char *at, size_t len) {
     return 0;
 }
 
+/*响应解析完成时触发*/
 static int response_complete(http_parser *parser) {
     connection *c = parser->data;
     thread *thread = c->thread;
@@ -333,6 +355,7 @@ static int response_complete(http_parser *parser) {
     thread->complete++;
     thread->requests++;
 
+    /*响应状态错误数*/
     if (status > 399) {
         thread->errors.status++;
     }
@@ -344,6 +367,7 @@ static int response_complete(http_parser *parser) {
     }
 
     if (--c->pending == 0) {
+        /*计算latency*/
         if (!stats_record(statistics.latency, now - c->start)) {
             thread->errors.timeout++;
         }
@@ -351,17 +375,21 @@ static int response_complete(http_parser *parser) {
         aeCreateFileEvent(thread->loop, c->fd, AE_WRITABLE, socket_writeable, c);
     }
 
+    /*检查http是否继续保活*/
     if (!http_should_keep_alive(parser)) {
+        /*不需要连接保活，则进行重连*/
         reconnect_socket(thread, c);
         goto done;
     }
 
+    /*再次构造响应parser*/
     http_parser_init(parser, HTTP_RESPONSE);
 
   done:
     return 0;
 }
 
+//处理connect事件
 static void socket_connected(aeEventLoop *loop, int fd, void *data, int mask) {
     connection *c = data;
 
@@ -371,6 +399,7 @@ static void socket_connected(aeEventLoop *loop, int fd, void *data, int mask) {
         case RETRY: return;
     }
 
+    /*初始化连接的响应http parser*/
     http_parser_init(&c->parser, HTTP_RESPONSE);
     c->written = 0;
 
@@ -389,6 +418,7 @@ static void socket_writeable(aeEventLoop *loop, int fd, void *data, int mask) {
     thread *thread = c->thread;
 
     if (c->delayed) {
+        /*执行延迟发送*/
         uint64_t delay = script_delay(thread->L);
         aeDeleteFileEvent(loop, fd, AE_WRITABLE);
         aeCreateTimeEvent(loop, delay, delay_request, c, NULL);
@@ -431,6 +461,7 @@ static void socket_readable(aeEventLoop *loop, int fd, void *data, int mask) {
     size_t n;
 
     do {
+        //自socket中读取数据，存放到c->buf中
         switch (sock.read(c, &n)) {
             case OK:    break;
             case ERROR: goto error;
@@ -456,6 +487,7 @@ static uint64_t time_us() {
     return (t.tv_sec * 1000000) + t.tv_usec;
 }
 
+//制作field的一个副本
 static char *copy_url_part(char *url, struct http_parser_url *parts, enum http_parser_url_fields field) {
     char *part = NULL;
 
@@ -482,7 +514,7 @@ static struct option longopts[] = {
     { NULL,          0,                 NULL,  0  }
 };
 
-static int parse_args(struct config *cfg, char **url, struct http_parser_url *parts, char **headers, int argc, char **argv) {
+static int parse_args(struct config *cfg, char **url/*测试的url*/, struct http_parser_url *parts, char **headers/*用户配置的header*/, int argc, char **argv) {
     char **header = headers;
     int c;
 
@@ -490,6 +522,7 @@ static int parse_args(struct config *cfg, char **url, struct http_parser_url *pa
     cfg->threads     = 2;
     cfg->connections = 10;
     cfg->duration    = 10;
+    /*默认超时时间*/
     cfg->timeout     = SOCKET_TIMEOUT_MS;
 
     while ((c = getopt_long(argc, argv, "t:c:d:s:H:T:Lrv?", longopts, NULL)) != -1) {
@@ -539,12 +572,15 @@ static int parse_args(struct config *cfg, char **url, struct http_parser_url *pa
         return -1;
     }
 
+    /*必须配置连接数，且连接数必须大于线程数*/
     if (!cfg->connections || cfg->connections < cfg->threads) {
         fprintf(stderr, "number of connections must be >= threads\n");
         return -1;
     }
 
+    /*记录要测试的url*/
     *url    = argv[optind];
+    /*将header数组最后一个元素置为NULL*/
     *header = NULL;
 
     return 0;
@@ -568,8 +604,8 @@ static void print_units(long double n, char *(*fmt)(long double), int width) {
 }
 
 static void print_stats(char *name, stats *stats, char *(*fmt)(long double)) {
-    uint64_t max = stats->max;
-    long double mean  = stats_mean(stats);
+    uint64_t max = stats->max;/*统计期获得的最大值*/
+    long double mean  = stats_mean(stats);/*每个统计期获得的值，得到的平均值*/
     long double stdev = stats_stdev(stats, mean);
 
     printf("    %-10s", name);

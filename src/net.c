@@ -14,12 +14,14 @@ status sock_close(connection *c) {
     return OK;
 }
 
+//读取socket
 status sock_read(connection *c, size_t *n) {
     ssize_t r = read(c->fd, c->buf, sizeof(c->buf));
     *n = (size_t) r;
     return r >= 0 ? OK : ERROR;
 }
 
+//写socket
 status sock_write(connection *c, char *buf, size_t len, size_t *n) {
     ssize_t r;
     if ((r = write(c->fd, buf, len)) == -1) {

@@ -9,8 +9,10 @@
 
 typedef struct {
     uint32_t connect;
+    /*读错误数*/
     uint32_t read;
     uint32_t write;
+    /*状态错误数*/
     uint32_t status;
     uint32_t timeout;
 } errors;

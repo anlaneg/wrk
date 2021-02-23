@@ -48,12 +48,15 @@
 # define ELEM_AT(a, i, v) ((unsigned int) (i) < ARRAY_SIZE(a) ? (a)[(i)] : (v))
 #endif
 
+/*设置parse的错误码*/
 #define SET_ERRNO(e)                                                 \
 do {                                                                 \
   parser->http_errno = (e);                                          \
 } while(0)
 
+//当前状态
 #define CURRENT_STATE() p_state
+//更新当前状态
 #define UPDATE_STATE(V) p_state = (enum state) (V);
 #define RETURN(V)                                                    \
 do {                                                                 \
@@ -79,14 +82,18 @@ do {                                                                 \
   assert(HTTP_PARSER_ERRNO(parser) == HPE_OK);                       \
                                                                      \
   if (LIKELY(settings->on_##FOR)) {                                  \
+    /*parser使用临时状态*/\
     parser->state = CURRENT_STATE();                                 \
+    /*settings提供了on_##FOR回调，此处触发此回调*/\
     if (UNLIKELY(0 != settings->on_##FOR(parser))) {                 \
       SET_ERRNO(HPE_CB_##FOR);                                       \
     }                                                                \
+    /*更新临时状态,保证回调设置生效*/\
     UPDATE_STATE(parser->state);                                     \
                                                                      \
     /* We either errored above or got paused; get out */             \
     if (UNLIKELY(HTTP_PARSER_ERRNO(parser) != HPE_OK)) {             \
+      /*返回当前解析位置*/\
       return (ER);                                                   \
     }                                                                \
   }                                                                  \
@@ -167,7 +174,7 @@ do {                                                                 \
 #define KEEP_ALIVE "keep-alive"
 #define CLOSE "close"
 
-
+//各method方法对应字符
 static const char *method_strings[] =
   {
 #define XX(num, name, string) #string,
@@ -276,26 +283,26 @@ static const uint8_t normal_url_char[32] = {
 enum state
   { s_dead = 1 /* important that this is > 0 */
 
-  , s_start_req_or_res
+  , s_start_req_or_res /*请求或响应报文起始状态*/
   , s_res_or_resp_H
-  , s_start_res
-  , s_res_H
-  , s_res_HT
-  , s_res_HTT
-  , s_res_HTTP
-  , s_res_http_major
-  , s_res_http_dot
-  , s_res_http_minor
-  , s_res_http_end
-  , s_res_first_status_code
-  , s_res_status_code
-  , s_res_status_start
+  , s_start_res /*响应报文起始状态*/
+  , s_res_H/*请求头开始，遇到‘H’*/
+  , s_res_HT/*请求头开始，当前已遇到'HT'*/
+  , s_res_HTT /*请求头开始，当前已遇到'HTT'*/
+  , s_res_HTTP /*请求头开始，当前已遇到'HTTP'，检测'/'*/
+  , s_res_http_major/*请求头开始，完成HTTP识别，准备识别主版本号*/
+  , s_res_http_dot /*识别主版本号后的'.'*/
+  , s_res_http_minor /*识别次版本号*/
+  , s_res_http_end /*完成类似“HTTP/1.0”格式识别*/
+  , s_res_first_status_code /*识别响应的首个状态码*/
+  , s_res_status_code /*识别响应的非首个状态码*/
+  , s_res_status_start /*完成状态码识别，开始识别字符状态*/
   , s_res_status
   , s_res_line_almost_done
 
-  , s_start_req
+  , s_start_req/*请求报文起始状态*/
 
-  , s_req_method
+  , s_req_method /*请求报文方法识别*/
   , s_req_spaces_before_url
   , s_req_schema
   , s_req_schema_slash
@@ -319,7 +326,7 @@ enum state
   , s_req_http_end
   , s_req_line_almost_done
 
-  , s_header_field_start
+  , s_header_field_start /*header字段识别开始*/
   , s_header_field
   , s_header_value_discard_ws
   , s_header_value_discard_ws_almost_done
@@ -443,6 +450,7 @@ enum http_host_state
 
 
 #if HTTP_PARSER_STRICT
+/*如果条件不满足，则直接设置错误，并goto error*/
 # define STRICT_CHECK(cond)                                          \
 do {                                                                 \
   if (cond) {                                                        \
@@ -649,6 +657,7 @@ size_t http_parser_execute (http_parser *parser,
     return 0;
   }
 
+  //收取到内容为0时，表示对端已关闭，处理状态
   if (len == 0) {
     switch (CURRENT_STATE()) {
       case s_body_identity_eof:
@@ -662,9 +671,11 @@ size_t http_parser_execute (http_parser *parser,
       case s_start_req_or_res:
       case s_start_res:
       case s_start_req:
+          /*维持在旧的状态上*/
         return 0;
 
       default:
+          /*状态有误，报错*/
         SET_ERRNO(HPE_INVALID_EOF_STATE);
         return 1;
     }
@@ -696,6 +707,7 @@ size_t http_parser_execute (http_parser *parser,
     break;
   }
 
+  /*遍历收到的内容*/
   for (p=data; p != data + len; p++) {
     ch = *p;
 
@@ -752,25 +764,29 @@ reexecute:
         }
         break;
 
-      case s_start_res:
+      case s_start_res:/*响应报文起始位置*/
       {
         parser->flags = 0;
         parser->content_length = ULLONG_MAX;
 
         switch (ch) {
           case 'H':
+              /*首行必须为HTTP开头，这里仅检查了'H'即跳至s_res_H状态*/
             UPDATE_STATE(s_res_H);
             break;
 
           case CR:
           case LF:
+              /*不明所以？？？*/
             break;
 
           default:
+              /*非HTTP 开头，报错*/
             SET_ERRNO(HPE_INVALID_CONSTANT);
             goto error;
         }
 
+        /*触发message_begin回调*/
         CALLBACK_NOTIFY(message_begin);
         break;
       }
@@ -791,11 +807,13 @@ reexecute:
         break;
 
       case s_res_HTTP:
+          /*HTTP后必须为’/‘*/
         STRICT_CHECK(ch != '/');
         UPDATE_STATE(s_res_http_major);
         break;
 
       case s_res_http_major:
+          /*主版本号识别*/
         if (UNLIKELY(!IS_NUM(ch))) {
           SET_ERRNO(HPE_INVALID_VERSION);
           goto error;
@@ -807,6 +825,7 @@ reexecute:
 
       case s_res_http_dot:
       {
+          /*主版本号后'.'识别*/
         if (UNLIKELY(ch != '.')) {
           SET_ERRNO(HPE_INVALID_VERSION);
           goto error;
@@ -817,6 +836,7 @@ reexecute:
       }
 
       case s_res_http_minor:
+          /*次版本号识别，由此可知，不支持HTTP/2*/
         if (UNLIKELY(!IS_NUM(ch))) {
           SET_ERRNO(HPE_INVALID_VERSION);
           goto error;
@@ -828,6 +848,7 @@ reexecute:
 
       case s_res_http_end:
       {
+          /*HTTP/1.0格式后，必须包含一个空格*/
         if (UNLIKELY(ch != ' ')) {
           SET_ERRNO(HPE_INVALID_VERSION);
           goto error;
@@ -841,12 +862,14 @@ reexecute:
       {
         if (!IS_NUM(ch)) {
           if (ch == ' ') {
+            /*“HTTP/1.0 ”后仍有空格，消耗掉，仍维持当前状态*/
             break;
           }
 
           SET_ERRNO(HPE_INVALID_STATUS);
           goto error;
         }
+        /*完成首状态数字识别，进入s_res_status_code识别下一个状态字符*/
         parser->status_code = ch - '0';
         UPDATE_STATE(s_res_status_code);
         break;
@@ -855,26 +878,32 @@ reexecute:
       case s_res_status_code:
       {
         if (!IS_NUM(ch)) {
+            /*状态码中遇到非数字*/
           switch (ch) {
             case ' ':
+                /*空格，转为识别字符状态*/
               UPDATE_STATE(s_res_status_start);
               break;
             case CR:
             case LF:
+                /*遇到CR，转识别字符状态，不消费字符再检查*/
               UPDATE_STATE(s_res_status_start);
               REEXECUTE();
               break;
             default:
+                /*状态错误*/
               SET_ERRNO(HPE_INVALID_STATUS);
               goto error;
           }
           break;
         }
 
+        /*维护当前状态，继续识别状态码*/
         parser->status_code *= 10;
         parser->status_code += ch - '0';
 
         if (UNLIKELY(parser->status_code > 999)) {
+            /*状态码校验*/
           SET_ERRNO(HPE_INVALID_STATUS);
           goto error;
         }
@@ -896,12 +925,14 @@ reexecute:
 
       case s_res_status:
         if (ch == CR) {
+            //去识别'\r'
           UPDATE_STATE(s_res_line_almost_done);
           CALLBACK_DATA(status);
           break;
         }
 
         if (ch == LF) {
+            /*遇到'\r'，直接进入s_header_field_start*/
           UPDATE_STATE(s_header_field_start);
           CALLBACK_DATA(status);
           break;
@@ -910,12 +941,14 @@ reexecute:
         break;
 
       case s_res_line_almost_done:
+          /*必须为'\r'进入s_header_field_start*/
         STRICT_CHECK(ch != LF);
         UPDATE_STATE(s_header_field_start);
         break;
 
       case s_start_req:
       {
+        /*请求头识别，先大致通过首字母，识别method*/
         if (ch == CR || ch == LF)
           break;
         parser->flags = 0;
@@ -967,6 +1000,7 @@ reexecute:
 
         matcher = method_strings[parser->method];
         if (ch == ' ' && matcher[parser->index] == '\0') {
+          /*method匹配完成，遇到’ ‘，跳转到url识别*/
           UPDATE_STATE(s_req_spaces_before_url);
         } else if (ch == matcher[parser->index]) {
           ; /* nada */
@@ -2052,7 +2086,7 @@ http_message_needs_eof (const http_parser *parser)
   return 1;
 }
 
-
+/*检查是否需要连接保活*/
 int
 http_should_keep_alive (const http_parser *parser)
 {
@@ -2080,7 +2114,7 @@ http_method_str (enum http_method m)
 
 
 void
-http_parser_init (http_parser *parser, enum http_parser_type t)
+http_parser_init (http_parser *parser, enum http_parser_type t/*parse类型*/)
 {
   void *data = parser->data; /* preserve application data */
   memset(parser, 0, sizeof(*parser));
@@ -2290,6 +2324,7 @@ http_parser_parse_url(const char *buf, size_t buflen, int is_connect,
   s = is_connect ? s_req_server_start : s_req_spaces_before_url;
   old_uf = UF_MAX;
 
+  //遍历传入的字符串
   for (p = buf; p < buf + buflen; p++) {
     s = parse_url_char(s, *p);
 

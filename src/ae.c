@@ -60,6 +60,7 @@
     #endif
 #endif
 
+/*创建event loop*/
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
